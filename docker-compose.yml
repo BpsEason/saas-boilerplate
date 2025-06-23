@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ${PROJECT_NAME:-saas-boilerplate}_backend:latest
+    container_name: ${PROJECT_NAME:-saas-boilerplate}_app
+    restart: unless-stopped
+    volumes:
+      - ./backend:/var/www/html
+    ports:
+      - "9000:9000"
+    environment:
+      WAIT_HOSTS: db:3306
+      WAIT_HOSTS_TIMEOUT: 300
+    depends_on:
+      - db
+      - redis
+      - mailhog
+    networks:
+      - app-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: ${PROJECT_NAME:-saas-boilerplate}_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./backend:/var/www/html
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/dist:/var/www/frontend_dist:ro # 新增：掛載前端構建後的靜態文件
+    depends_on:
+      - app
+      - frontend # 如果前端不只構建，也提供服務時
+    networks:
+      - app-network
+
+  db:
+    image: mysql:8.0
+    container_name: ${PROJECT_NAME:-saas-boilerplate}_db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-laravel_saas_db}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-password}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-password}
+      MYSQL_USER: ${DB_USERNAME:-laravel_user}
+      MYSQL_ALLOW_EMPTY_PASSWORD: "yes" # 僅用於開發環境，請勿在生產環境使用
+    volumes:
+      - dbdata:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - app-network
+
+  redis:
+    image: redis:6.2-alpine
+    container_name: ${PROJECT_NAME:-saas-boilerplate}_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ${PROJECT_NAME:-saas-boilerplate}_frontend:latest
+    container_name: ${PROJECT_NAME:-saas-boilerplate}_frontend
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules # 匿名卷，確保 node_modules 不會被主機覆蓋
+    # 在開發環境中，如果您想讓 Vite 伺服器運行，可以啟用以下端口
+    ports:
+      - "5173:5173" # 確保與前端的 EXPOSE 端口一致
+    networks:
+      - app-network
+
+  mailhog:
+    image: mailhog/mailhog
+    container_name: ${PROJECT_NAME:-saas-boilerplate}_mailhog
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - app-network
+
+volumes:
+  dbdata:
+
+networks:
+  app-network:
+    driver: bridge
