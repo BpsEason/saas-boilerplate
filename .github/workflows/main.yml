@@ -1,0 +1,134 @@
+name: CI/CD Pipeline
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ${{ secrets.DB_ROOT_PASSWORD || 'password' }}
+          MYSQL_DATABASE: ${{ secrets.DB_DATABASE || 'laravel_saas_db' }}
+          MYSQL_USER: ${{ secrets.DB_USERNAME || 'laravel_user' }}
+          MYSQL_PASSWORD: ${{ secrets.DB_PASSWORD || 'password' }}
+        ports:
+          - "3306:3306"
+        options: >
+          --health-cmd="mysqladmin ping -h 127.0.0.1" --health-interval=10s --health-timeout=5s --health-retries=5
+      redis:
+        image: redis:6.2-alpine
+        ports:
+          - "6379:6379"
+        options: >
+          --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql, pdo_pgsql, opcache, bcmath, exif, pcntl, gd, xml
+          ini-values: post_max_size=256M, upload_max_filesize=256M
+          coverage: none
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Backend Dependencies (Composer)
+        run: |
+          cd backend
+          composer install --no-dev --no-interaction --prefer-dist
+
+      - name: Create .env file for Backend
+        run: |
+          cd backend
+          cp .env.example .env
+        # 設定 CI/CD 環境變數，與 services 中的 MySQL 配置同步
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: ${{ services.mysql.env.MYSQL_DATABASE }}
+          DB_USERNAME: ${{ services.mysql.env.MYSQL_USER }}
+          DB_PASSWORD: ${{ services.mysql.env.MYSQL_PASSWORD }}
+          CACHE_DRIVER: redis
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+
+      - name: Generate Backend App Key
+        run: |
+          cd backend
+          php artisan key:generate
+
+      - name: Run Backend Migrations
+        run: |
+          cd backend
+          php artisan migrate --force
+        env:
+          # 確保環境變數再次設定給 Artisan 命令
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: ${{ services.mysql.env.MYSQL_DATABASE }}
+          DB_USERNAME: ${{ services.mysql.env.MYSQL_USER }}
+          DB_PASSWORD: ${{ services.mysql.env.MYSQL_PASSWORD }}
+
+      - name: Run Backend Tests (PHPUnit)
+        run: |
+          cd backend
+          php artisan test
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: ${{ services.mysql.env.MYSQL_DATABASE }}
+          DB_USERNAME: ${{ services.mysql.env.MYSQL_USER }}
+          DB_PASSWORD: ${{ services.mysql.env.MYSQL_PASSWORD }}
+          CACHE_DRIVER: redis
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: 6379
+
+      - name: Run Backend Static Analysis (PHPStan)
+        run: |
+          cd backend
+          ./vendor/bin/phpstan analyse -c phpstan.neon.dist
+
+      - name: Install Frontend Dependencies (Yarn)
+        run: |
+          cd frontend
+          yarn install --frozen-lockfile
+
+      - name: Create .env file for Frontend
+        run: |
+          cd frontend
+          cp .env.example .env
+
+      - name: Run Frontend Tests (Vitest)
+        run: |
+          cd frontend
+          yarn test
+
+      - name: Run Frontend Code Style Check (ESLint)
+        run: |
+          cd frontend
+          yarn lint
+
+      # - name: Generate API Documentation (Laravel Swagger) - If you use it
+      #   run: |
+      #     cd backend
+      #     php artisan l5-swagger:generate
+
